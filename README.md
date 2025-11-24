@@ -151,12 +151,17 @@ Use the `--limit` flag to train on a subset of matches during development.
 
 ## Data Source
 
-Match data provided by [Jeff Sackmann](https://github.com/JeffSackmann/tennis_atp).
+Match data provided by [Jeff Sackmann's tennis_atp repository](https://github.com/JeffSackmann/tennis_atp), licensed under [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/).
 
-## Licence
+## License
 
-This project is licensed under the MIT Licence - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License** - see the [LICENSE](LICENSE) file for details.
+
+**Important**: This project is for **educational and research purposes only**. It may not be used for commercial purposes in compliance with the data source license.
+
+**Player Names**: Professional tennis player names are used for factual, statistical, and analytical purposes only. No endorsement by any player is implied.
 
 ## Author
 
 Created by [Utku Gürel](https://github.com/utkugurel)
+
