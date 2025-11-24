@@ -91,6 +91,13 @@ def parse_payload(payload: Dict) -> Tuple[Dict, Dict, str]:
 
     if not p1["name"] or not p2["name"]:
         raise ValueError("Player names cannot be empty.")
+    
+    # Prevent same player in same year (would not give 50-50 probability)
+    if p1["name"].lower() == p2["name"].lower() and p1["year"] == p2["year"]:
+        raise ValueError(
+            f"Cannot predict a match between {p1['name']} and themselves in the same year. "
+            "Please select different players or different years."
+        )
 
     return p1, p2, surface
 
