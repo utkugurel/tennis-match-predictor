@@ -4,39 +4,68 @@
 
 Compare prime versions of any two ATP players on a given surface. This project aggregates historical season-long player stats, trains a Random Forest model, and serves predictions through a Flask API consumed by a single-page Tailwind UI.
 
-## Repository Layout
+## Features
+
+- 🤖 **AI-Powered Predictions**: Random Forest classifier trained on historical ATP match data
+- 📊 **Comprehensive Stats**: Season-long player statistics including serve, return, and surface performance
+- 🎨 **Modern UI**: Clean, responsive interface with player autocomplete
+- ⚡ **Fast Inference**: ONNX-optimised model for quick predictions
+- 🌐 **Deployed on Vercel**: Serverless architecture with automatic deployments
+
+## Tech Stack
+
+- **Backend**: Flask, ONNX Runtime, SQLite
+- **Frontend**: Vanilla JavaScript, Tailwind CSS
+- **ML**: Scikit-Learn, Random Forest Classifier
+- **Deployment**: Vercel (serverless functions)
+
+## Project Structure
 
 | File | Purpose |
 | --- | --- |
-| `build_database.py` | ETL script that ingests `data/atp_matches_*.csv`, pivots winner/loser rows, and stores yearly surface stats in `atp_stats.db`. |
-| `tennis_features.py` | Shared feature engineering helpers used by both training and inference (`get_stats_from_db`, `build_match_example`). |
-| `train_model.py` | Builds the training matrix from historical matches, fits a `Pipeline(StandardScaler + OneHotEncoder + LogisticRegression)`, saves `tennis_predictor.pkl`. |
-| `app.py` | Flask backend exposing `/predict` and `/health`, loads the trained pipeline, and responds with win probabilities plus season summaries. |
-| `index.html` | Tailwind-based UI that posts to the API and visualizes the probabilities. |
+| `build_database.py` | ETL script that ingests `data/atp_matches_*.csv`, pivots winner/loser rows, and stores yearly surface stats in `atp_stats.db` |
+| `tennis_features.py` | Shared feature engineering helpers used by both training and inference |
+| `train_model.py` | Builds the training matrix from historical matches, fits a Random Forest pipeline, and saves the model |
+| `convert_to_onnx.py` | Converts the trained Scikit-Learn model to ONNX format for optimised inference |
+| `app.py` | Flask backend exposing `/api/predict`, `/api/players`, and `/health` endpoints |
+| `static_content/index.html` | Tailwind-based UI with autocomplete and real-time predictions |
 
-## Prerequisites
+## Getting Started
 
-1. Python 3.10+
-2. [OPTIONAL] `virtualenv` or `venv`
-3. ATP CSVs already present in `data/` (repo includes them)
+### Prerequisites
 
-Install dependencies:
+- Python 3.10+
+- Virtual environment (recommended)
+- ATP match data CSVs (included in `data/` directory)
+
+### Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/utkugurel/tennis-match-predictor.git
+cd tennis-match-predictor
+
+# Create and activate virtual environment
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Phase 1 — Build the SQLite Stats Database
+## Building the Database
+
+The first step is to process the raw CSV match data into an SQLite database:
 
 ```bash
 python build_database.py
 ```
 
-This creates/overwrites `atp_stats.db` with the `player_yearly_stats` table. Expect the step to take several minutes due to the number of CSVs.
+This creates `atp_stats.db` with the `player_yearly_stats` table. The process takes several minutes due to the volume of historical data.
 
-## Phase 2 — Train the Model
+## Training the Model
+
+Train the Random Forest classifier on historical match data:
 
 ```bash
 python train_model.py \
@@ -45,58 +74,89 @@ python train_model.py \
   --model-path tennis_predictor.pkl
 ```
 
-Training iterates through every valid match, generates two samples (winner vs loser and vice versa), fits the pipeline, prints validation metrics, and writes `tennis_predictor.pkl`.
+The script:
+- Generates training samples (winner vs loser and vice versa)
+- Fits a pipeline with StandardScaler, OneHotEncoder, and RandomForestClassifier
+- Prints validation metrics (AUC, accuracy, classification report)
+- Saves the trained model to `tennis_predictor.pkl`
 
-**Faster smoke test:** pass `--limit 20000` (matches) to iterate quickly while validating the pipeline end-to-end.
+**Quick test**: Use `--limit 1000` to train on a subset of matches for faster iteration.
 
-## Phase 3 — Run the API
+## Converting to ONNX
+
+For optimised inference in production, convert the model to ONNX format:
+
+```bash
+python convert_to_onnx.py
+```
+
+This creates `tennis_predictor.onnx`, which is significantly faster and has smaller dependencies than the Scikit-Learn model.
+
+## Running Locally
+
+Start the Flask development server:
 
 ```bash
 export FLASK_APP=app.py
-export MODEL_PATH=tennis_predictor.pkl
-flask run --host 0.0.0.0 --port 5000
+flask run
 ```
 
-`/predict` accepts:
+The app will be available at `http://localhost:5000`. The frontend automatically loads player names for autocomplete and comes pre-filled with an example match-up.
 
-```json
-{
-  "player1_name": "Roger Federer",
-  "player1_year": 2015,
-  "player2_name": "Rafael Nadal",
-  "player2_year": 2007,
-  "surface": "Hard"
-}
+### API Example
+
+```bash
+curl -X POST http://localhost:5000/api/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "player1_name": "Roger Federer",
+    "player1_year": 2015,
+    "player2_name": "Rafael Nadal",
+    "player2_year": 2007,
+    "surface": "Hard"
+  }'
 ```
 
-## Phase 4 — Frontend
+## Deployment
 
-Open `index.html` in your browser. If your backend runs on a non-default host/port, set `window.API_URL` before including the script or adjust the constant inside the file.
+The app is configured for Vercel with serverless functions:
 
-## Testing the Model & API
+1. Connect your GitHub repository to Vercel
+2. Vercel automatically detects the configuration from `vercel.json`
+3. Push to `main` branch to trigger automatic deployments
 
-1. **Unit-style check:** ensure the helper module imports and compiles.
-   ```bash
-   python -m py_compile tennis_features.py train_model.py app.py
-   ```
-2. **Predictive sanity check:** after training, run a quick curl request.
-   ```bash
-   curl -X POST http://localhost:5000/predict \
-     -H "Content-Type: application/json" \
-     -d '{"player1_name":"Roger Federer","player1_year":2015,"player2_name":"Rafael Nadal","player2_year":2007,"surface":"Hard"}'
-   ```
-3. **Browser test:** load the UI, input two players/years/surface, verify probabilities render and match the API response.
+The `data/` directory is excluded via `.vercelignore` to stay within size limits.
+
+## Model Performance
+
+The Random Forest classifier achieves:
+- **Validation AUC**: ~0.94
+- **Accuracy**: ~85%
+
+Key features include:
+- Player statistics (serve %, return %, break points, etc.)
+- Surface-specific performance
+- Relative differences (rank, age, height)
 
 ## Troubleshooting
 
-- **Missing player/year/surface**: ensure you ran `build_database.py` after updating CSVs, and confirm the combination exists in `player_yearly_stats`.
-- **Model load error**: delete/replace `tennis_predictor.pkl` and re-run `train_model.py`.
-- **Slow preprocessing**: use the `--limit` flag while iterating, then remove it for a full training pass once satisfied.
+**Missing player/year/surface combination**  
+Ensure you've run `build_database.py` and that the player competed in that year on that surface.
+
+**Model load error**  
+Delete `tennis_predictor.pkl` or `tennis_predictor.onnx` and retrain the model.
+
+**Slow training**  
+Use the `--limit` flag to train on a subset of matches during development.
 
 ## Data Source
 
 Match data provided by [Jeff Sackmann](https://github.com/JeffSackmann/tennis_atp).
 
-## License
+## Licence
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT Licence - see the [LICENSE](LICENSE) file for details.
+
+## Author
+
+Created by [Utku Gürel](https://github.com/utkugurel)
