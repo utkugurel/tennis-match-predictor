@@ -1,6 +1,8 @@
 # Tennis Match Predictor
 
-Compare prime versions of any two ATP players on a given surface. This project aggregates historical season-long player stats, trains a logistic-regression model, and serves predictions through a Flask API consumed by a single-page Tailwind UI.
+🎾 **[Live Demo](https://tennis-match-predictor.vercel.app/)** 🎾
+
+Compare prime versions of any two ATP players on a given surface. This project aggregates historical season-long player stats, trains a Random Forest model, and serves predictions through a Flask API consumed by a single-page Tailwind UI.
 
 ## Repository Layout
 
