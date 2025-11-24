@@ -1,0 +1,4 @@
+flask>=2.3
+numpy>=1.26
+onnxruntime
+gunicorn

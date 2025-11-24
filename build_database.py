@@ -37,16 +37,32 @@ def build_database():
     # 2. Extract match year and clean data
     # Add errors='coerce' to gracefully handle bad dates like "300"
     all_matches_df['year'] = pd.to_datetime(all_matches_df['tourney_date'], format='%Y%m%d', errors='coerce').dt.year
+
+    # Normalize surface labels to avoid mismatch ("Clay ", "clay", etc.)
+    if 'surface' in all_matches_df.columns:
+        all_matches_df['surface'] = all_matches_df['surface'].astype(str).str.strip().str.title()
     
-    # Drop rows where we don't have the essential data for stats
-    # Add 'year' to this list to drop the rows that failed date parsing
-    all_matches_df = all_matches_df.dropna(subset=['surface', 'w_svpt', 'l_svpt', 'winner_name', 'loser_name', 'year'])
+    # Ensure all stat columns exist so vintage datasets without certain measurements
+    # still yield player-season rows (we'll treat missing stats as zero later).
+    stat_cols = ['ace', 'df', 'svpt', '1stIn', '1stWon', '2ndWon', 'SvGms', 'bpSaved', 'bpFaced']
+    for col in stat_cols:
+        for prefix in ['w_', 'l_']:
+            full_col = f'{prefix}{col}'
+            if full_col not in all_matches_df.columns:
+                all_matches_df[full_col] = np.nan
+
+    info_cols = ['hand', 'ht', 'age', 'rank', 'rank_points']
+    for col in info_cols:
+        for prefix in ['winner_', 'loser_']:
+            full_col = f'{prefix}{col}'
+            if full_col not in all_matches_df.columns:
+                all_matches_df[full_col] = np.nan
+
+    # Drop rows where we don't have the essential identifiers
+    all_matches_df = all_matches_df.dropna(subset=['surface', 'winner_name', 'loser_name', 'year'])
     
     # 3. Define mappings for all stats
     # We capture stats for the player ('p_') and their opponent ('o_')
-    
-    # Raw stats to sum up
-    stat_cols = ['ace', 'df', 'svpt', '1stIn', '1stWon', '2ndWon', 'SvGms', 'bpSaved', 'bpFaced']
     
     winner_cols = {'year': 'year', 'surface': 'surface', 'winner_id': 'player_id', 'winner_name': 'player_name'}
     loser_cols = {'year': 'year', 'surface': 'surface', 'loser_id': 'player_id', 'loser_name': 'player_name'}
@@ -124,4 +140,3 @@ def build_database():
 
 if __name__ == "__main__":
     build_database()
-

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tennis Match Predictor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Use relative path for Vercel deployment
+    const API_URL = "/api/predict";
+    const PLAYERS_URL = "/api/players";
+
+    async function loadPlayers() {
+      try {
+        const response = await fetch(PLAYERS_URL);
+        if (response.ok) {
+          const players = await response.json();
+          const datalist = document.getElementById('players-list');
+          datalist.innerHTML = players.map(p => `<option value="${p}">`).join('');
+        }
+      } catch (e) {
+        console.error("Failed to load players", e);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      loadPlayers();
+    });
+
+    async function handlePrediction(event) {
+      event.preventDefault();
+      hideError();
+      const formData = new FormData(event.target);
+      const payload = {
+        player1_name: formData.get('player1_name'),
+        player1_year: Number(formData.get('player1_year')),
+        player2_name: formData.get('player2_name'),
+        player2_year: Number(formData.get('player2_year')),
+        surface: formData.get('surface'),
+      };
+
+      if (!payload.player1_name || !payload.player2_name) {
+        showError('Both player names are required.');
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Prediction failed.');
+        }
+        showResults(data);
+      } catch (error) {
+        showError(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function setLoading(isLoading) {
+      const button = document.getElementById('predict-button');
+      const spinner = document.getElementById('loading-spinner');
+      button.disabled = isLoading;
+      button.classList.toggle('opacity-50', isLoading);
+      spinner.classList.toggle('hidden', !isLoading);
+      button.querySelector('span').textContent = isLoading ? 'Predicting...' : 'Predict outcome';
+    }
+
+    function renderPlayerCard(player, slot) {
+      const accent = slot === 'player1' ? 'text-emerald-400' : 'text-sky-400';
+      const border = slot === 'player1' ? 'border-emerald-500/40' : 'border-sky-500/40';
+      const winPct = (player.win_probability * 100).toFixed(1);
+      const season = player.season_summary;
+      const badge = slot === 'player1' ? 'P1' : 'P2';
+
+      return `
+        <div class="rounded-xl border ${border} bg-slate-900/70 p-5 shadow-lg shadow-black/30">
+          <div class="flex items-center justify-between mb-4">
+            <span class="text-xs font-semibold tracking-widest ${accent}">${badge}</span>
+            <span class="text-sm text-slate-400">${player.surface}</span>
+          </div>
+          <p class="text-lg font-semibold text-white">${player.name}</p>
+          <p class="text-sm text-slate-400 mb-3">Season ${player.year}</p>
+          <p class="text-3xl font-bold text-white mb-4">${winPct}%</p>
+          <div class="grid grid-cols-2 gap-3 text-sm text-slate-300">
+            <div>
+              <p class="text-xs uppercase tracking-wide text-slate-500">Record</p>
+              <p>${season.wins}-${season.losses}</p>
+            </div>
+            <div>
+              <p class="text-xs uppercase tracking-wide text-slate-500">Win %</p>
+              <p>${(season.win_pct * 100).toFixed(1)}%</p>
+            </div>
+            <div>
+              <p class="text-xs uppercase tracking-wide text-slate-500">Matches</p>
+              <p>${season.matches_played}</p>
+            </div>
+            <div>
+              <p class="text-xs uppercase tracking-wide text-slate-500">Rank</p>
+              <p>${season.rank || 'N/A'}</p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function showResults(data) {
+      const card = document.getElementById('result-card');
+      document.getElementById('result-surface').textContent = `Surface · ${data.surface}`;
+      document.getElementById('result-version').textContent = `Model v${data.model_version}`;
+      document.getElementById('result-players').innerHTML = `
+        ${renderPlayerCard(data.player1, 'player1')}
+        ${renderPlayerCard(data.player2, 'player2')}
+      `;
+
+      const p1Percent = (data.player1.win_probability * 100).toFixed(1);
+      const p2Percent = (data.player2.win_probability * 100).toFixed(1);
+      const bar = document.getElementById('progress-bar');
+      bar.style.width = `${p1Percent}%`;
+      document.getElementById('p1-prob-label').textContent = `${data.player1.name} ${p1Percent}%`;
+      document.getElementById('p2-prob-label').textContent = `${data.player2.name} ${p2Percent}%`;
+      card.classList.remove('hidden');
+    }
+
+    function showError(message) {
+      const banner = document.getElementById('error-banner');
+      banner.textContent = message;
+      banner.classList.remove('hidden');
+    }
+
+    function hideError() {
+      const banner = document.getElementById('error-banner');
+      banner.classList.add('hidden');
+    }
+  </script>
+</head>
+
+<body class="bg-slate-950 text-white">
+  <div class="min-h-screen px-4 py-10">
+    <div class="mx-auto max-w-5xl">
+      <header class="mb-10 text-center">
+        <p class="text-sm uppercase tracking-[0.3em] text-emerald-400 font-bold">Tennis Lab</p>
+        <h1 class="mt-3 text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-sky-400">
+          Tennis Match Predictor
+        </h1>
+        <p class="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">
+          Compare prime versions of any two ATP players on any surface. Enter the season and surface, and our AI will
+          estimate the win probability.
+        </p>
+      </header>
+
+      <form id="predict-form" class="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur"
+        onsubmit="handlePrediction(event)">
+        <div class="grid gap-6 md:grid-cols-2">
+          <div class="space-y-3">
+            <p class="text-sm font-semibold text-slate-200">Player 1</p>
+            <label class="block text-sm text-slate-400">
+              Name
+              <input name="player1_name" type="text" placeholder="Roger Federer" list="players-list"
+                value="Rafael Nadal"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-white focus:border-emerald-400 focus:outline-none focus:ring-0"
+                required />
+            </label>
+            <label class="block text-sm text-slate-400">
+              Season (year)
+              <input name="player1_year" type="number" min="1968" max="2024" value="2013"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-white focus:border-emerald-400 focus:outline-none focus:ring-0"
+                required />
+            </label>
+          </div>
+
+          <div class="space-y-3">
+            <p class="text-sm font-semibold text-slate-200">Player 2</p>
+            <label class="block text-sm text-slate-400">
+              Name
+              <input name="player2_name" type="text" placeholder="Rafael Nadal" list="players-list"
+                value="Roger Federer"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-white focus:border-sky-400 focus:outline-none focus:ring-0"
+                required />
+            </label>
+            <label class="block text-sm text-slate-400">
+              Season (year)
+              <input name="player2_year" type="number" min="1968" max="2024" value="2011"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-white focus:border-sky-400 focus:outline-none focus:ring-0"
+                required />
+            </label>
+          </div>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <label class="block text-sm text-slate-400">
+            Surface
+            <select name="surface"
+              class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-white focus:border-emerald-400 focus:outline-none focus:ring-0">
+              <option value="Hard">Hard</option>
+              <option value="Clay" selected>Clay</option>
+              <option value="Grass">Grass</option>
+            </select>
+          </label>
+          <div
+            class="rounded-xl border border-slate-700/50 bg-slate-800/50 p-5 text-sm text-slate-300 backdrop-blur-sm">
+            <p class="font-semibold text-white flex items-center gap-2">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              How it works
+            </p>
+            <p class="mt-2 leading-relaxed">
+              We analyze historical season-long stats from the ATP database and process them through a
+              <span class="text-emerald-400 font-medium">Random Forest Classifier</span>.
+              The model evaluates player attributes, surface performance, and relative differences to predict the match
+              outcome.
+            </p>
+          </div>
+        </div>
+
+        <button id="predict-button" type="submit"
+          class="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500/90 px-4 py-3 text-lg font-semibold text-white transition hover:bg-emerald-400 focus:outline-none">
+          <svg id="loading-spinner" class="hidden h-5 w-5 animate-spin text-white" xmlns="http://www.w3.org/2000/svg"
+            fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3.5-3.5L12 0v4a8 8 0 00-8 8h4z"></path>
+          </svg>
+          <span>Predict outcome</span>
+        </button>
+      </form>
+
+      <datalist id="players-list"></datalist>
+
+      <div id="error-banner"
+        class="mt-6 hidden rounded-xl border border-red-500/40 bg-red-500/20 px-4 py-3 text-sm text-red-100"></div>
+
+      <section id="result-card"
+        class="mt-8 hidden rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-black/40">
+        <div class="flex flex-col gap-2 text-sm text-slate-400 md:flex-row md:items-center md:justify-between">
+          <p id="result-surface" class="font-semibold text-white"></p>
+          <p id="result-version"></p>
+        </div>
+        <div id="result-players" class="mt-5 grid gap-4 md:grid-cols-2"></div>
+        <div class="mt-6">
+          <p class="text-sm text-slate-300">Win probability</p>
+          <div class="mt-2 h-4 w-full rounded-full bg-slate-800">
+            <div id="progress-bar"
+              class="h-full rounded-full bg-emerald-400 text-right text-xs font-semibold leading-4 text-slate-900"
+              style="width: 50%;"></div>
+          </div>
+          <div class="mt-2 flex justify-between text-sm text-slate-400">
+            <span id="p1-prob-label"></span>
+            <span id="p2-prob-label"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="mt-16 text-center text-sm text-slate-500">
+    <p>
+      Data provided by <a href="https://github.com/JeffSackmann/tennis_atp" target="_blank"
+        class="text-slate-400 hover:text-emerald-400 transition">Jeff Sackmann</a>.
+      Powered by <a href="https://scikit-learn.org/" target="_blank"
+        class="text-slate-400 hover:text-emerald-400 transition">Scikit-Learn</a> &
+      <a href="https://onnx.ai/" target="_blank" class="text-slate-400 hover:text-emerald-400 transition">ONNX</a>.
+    </p>
+  </footer>
+  </div>
+</body>
+
+</html>

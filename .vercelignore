@@ -1,0 +1,10 @@
+# Vercel Ignore
+data/
+*.csv
+.venv/
+.git/
+__pycache__/
+build_database.py
+train_model.py
+tests/
+*.md
