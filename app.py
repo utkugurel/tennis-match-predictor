@@ -26,7 +26,7 @@ FAVICON = (
     "<text y=%22.9em%22 font-size=%2290%22>🎾</text></svg>"
 )
 
-app = Dash(
+dash_app = Dash(
     __name__,
     title="Tennis Match Predictor",
     update_title=None,
@@ -44,7 +44,7 @@ THEME_BOOT = (
     "catch(e){}</script>"
 )
 
-app.index_string = f"""<!DOCTYPE html>
+dash_app.index_string = f"""<!DOCTYPE html>
 <html lang="en" data-bs-theme="dark">
 <head>
   {{%metas%}}
@@ -59,7 +59,10 @@ app.index_string = f"""<!DOCTYPE html>
   <footer>{{%config%}}{{%scripts%}}{{%renderer%}}</footer>
 </body>
 </html>"""
-server = app.server
+# WSGI entry points. Vercel's Python runtime loads `app` from this module
+# (app:app), so `app` must be the Flask server, not the Dash object.
+server = dash_app.server
+app = server
 
 
 # ---------------------------------------------------------------- helpers
@@ -205,7 +208,7 @@ def _graph(graph_id: str) -> dcc.Graph:
 
 surface_options = [{"label": s, "value": s} for s in SURFACES]
 
-app.layout = dbc.Container(
+dash_app.layout = dbc.Container(
     [
         html.Header(
             [
@@ -368,7 +371,7 @@ def choose_season(trigger: Optional[str], current: Optional[int], preferred: Opt
 
 
 def _register_player_search(prefix: str):
-    @app.callback(
+    @dash_app.callback(
         Output(f"{prefix}-player", "options"),
         Input(f"{prefix}-player", "search_value"),
         State(f"{prefix}-player", "value"),
@@ -381,7 +384,7 @@ def _register_player_search(prefix: str):
             options = _player_option(current) + options
         return options
 
-    @app.callback(
+    @dash_app.callback(
         Output(f"{prefix}-season", "options"),
         Output(f"{prefix}-season", "value"),
         Output(f"{prefix}-preferred-year", "data"),
@@ -511,7 +514,7 @@ def hero(p1: Dict, p2: Dict, y1: int, y2: int, probability: float) -> dbc.Card:
     )
 
 
-@app.callback(
+@dash_app.callback(
     Output("hero", "children"),
     Output("season-tiles", "children"),
     Output("radar", "figure"),
@@ -553,7 +556,7 @@ def update_prediction(p1_id, y1, p2_id, y2, surface, dark=True):
     )
 
 
-@app.callback(
+@dash_app.callback(
     Output("career", "figure"),
     Input("p1-player", "value"),
     Input("p2-player", "value"),
@@ -575,7 +578,7 @@ def update_career(p1_id, p2_id, y1, y2, metric, surface, dark=True):
     return charts.career_lines(careers, names, metric, [y1, y2], theme=theme)
 
 
-@app.callback(
+@dash_app.callback(
     Output("surface-bars", "figure"),
     Output("heatmap-p1", "figure"),
     Output("heatmap-p2", "figure"),
@@ -622,7 +625,7 @@ def h2h_table(matches: List[Dict]) -> html.Div:
                      className="h2h-table mt-2")
 
 
-@app.callback(
+@dash_app.callback(
     Output("h2h-tiles", "children"),
     Output("h2h-timeline", "figure"),
     Output("h2h-table", "children"),
@@ -675,7 +678,7 @@ def update_h2h(p1_id, p2_id, dark=True):
 # Theme handling runs in the browser. On page load it restores the saved
 # choice into the switch (which re-renders the charts in that theme); on a
 # click it applies and saves the new one.
-app.clientside_callback(
+dash_app.clientside_callback(
     """
     function(dark) {
         var triggered = (dash_clientside.callback_context.triggered || [])
@@ -822,4 +825,4 @@ def api_predict():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8050)), debug=bool(os.environ.get("DEBUG")))
+    dash_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8050)), debug=bool(os.environ.get("DEBUG")))

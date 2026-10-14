@@ -24,7 +24,7 @@ Compare any two ATP seasons on any surface. The app predicts who would win and s
 | Path | Purpose |
 | --- | --- |
 | `app.py` | Dash app: layout, callbacks, `/health` and `/api/predict` |
-| `api/index.py` | Vercel entry point (exposes the WSGI app) |
+| `api/index.py` | Alternative Vercel entry point (same WSGI server as `app.app`) |
 | `assets/style.css` | Dark theme styling (served by Dash automatically) |
 | `tennis/db.py` | Read-only queries (players, seasons, careers, head-to-head) |
 | `tennis/predictor.py` | ONNX inference that gives the same result whichever player is first |
@@ -116,7 +116,7 @@ Names must match a player's full name exactly (case and accents are ignored) or 
 
 ## Deployment
 
-Vercel routes every request to `api/index.py` (`vercel.json`), which serves the Dash app. `.vercelignore` keeps raw data, training code and tests out of the deployment; only `requirements.txt` (runtime dependencies) is installed.
+Vercel's Python runtime loads the WSGI app from `app.py` (`app:app`): `app` is Dash's Flask server, and the Dash object itself is `dash_app`. `vercel.json` rewrites every path to the function, and `api/index.py` exposes the same server. `.vercelignore` keeps raw data, training code and tests out of the deployment; only `requirements.txt` (runtime dependencies) is installed.
 
 ## Data source
 

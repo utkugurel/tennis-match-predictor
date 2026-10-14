@@ -194,3 +194,11 @@ def _season(pid, year, surface):
     from tennis import db
 
     return db.season(pid, year, surface)
+
+
+def test_vercel_entrypoint_is_wsgi():
+    # Vercel loads `app` from app.py (app:app); it must be the Flask WSGI app.
+    import flask
+
+    assert isinstance(app_module.app, flask.Flask)
+    assert app_module.app is app_module.server
