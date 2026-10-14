@@ -1,0 +1,152 @@
+/* Dark is the default; the header switch sets data-bs-theme on <html>.
+   Player colours (--p1/--p2) are the same in both themes: they pass the
+   colour-blind and contrast checks on both surfaces. */
+:root, [data-bs-theme="dark"] {
+  --bg: #0b1120;
+  --surface: #0f172a;
+  --surface-2: #111c33;
+  --border: #1e293b;
+  --hover: #1e293b;
+  --ink: #e2e8f0;
+  --ink-muted: #94a3b8;
+  --link: #6ee7b7;
+  --link-hover: #a7f3d0;
+  --accent: #34d399;
+  --p1: #059669;
+  --p2: #3b82f6;
+}
+
+[data-bs-theme="light"] {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --border: #e2e8f0;
+  --hover: #f1f5f9;
+  --ink: #0f172a;
+  --ink-muted: #475569;
+  --link: #047857;
+  --link-hover: #065f46;
+  --accent: #059669;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--link); }
+a:hover { color: var(--link-hover); }
+
+.title {
+  font-weight: 700;
+  font-size: clamp(2rem, 5vw, 3rem);
+  background: linear-gradient(90deg, #34d399, #60a5fa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.subtitle { color: var(--ink-muted); max-width: 40rem; margin: 0.75rem auto 0; }
+
+.site-header { position: relative; }
+.theme-toggle {
+  position: absolute; top: 0; right: 0;
+  display: flex; align-items: center; gap: 0.4rem;
+  color: var(--ink-muted); font-size: 0.85rem;
+}
+.theme-toggle .form-check { margin: 0; min-height: 0; }
+.theme-toggle .form-check-input { cursor: pointer; }
+@media (max-width: 576px) {
+  .site-header { padding-top: 2rem; }
+}
+
+.card, .accordion-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.accordion-button, .accordion-button:not(.collapsed) {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.picker-title {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.85rem; font-weight: 600; color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.5rem;
+}
+.surface-group { flex-wrap: wrap; justify-content: center; }
+.surface-group .form-check { padding: 0; margin: 0; }
+.surface-group .btn { border-radius: 0; margin: 0 -1px 0 0; }
+
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 0.4rem; flex: none; }
+.dot-p1 { background: var(--p1); }
+.dot-p2 { background: var(--p2); transform: rotate(45deg); border-radius: 2px; }
+
+/* Dropdowns follow the theme variables. Set on the root, not on
+   .dash-dropdown: Dash renders the open option list in a portal outside the
+   dropdown element, so scoped overrides don't reach it. The `html`
+   prefix outranks Dash's own :root defaults, which load later. */
+html:root, html[data-bs-theme] {
+  --Dash-Fill-Inverse-Strong: var(--surface-2);
+  --Dash-Text-Primary: var(--ink);
+  --Dash-Text-Strong: var(--ink);
+  --Dash-Stroke-Strong: var(--border);
+  /* Selected/hovered option and focus colour: the accent green */
+  --Dash-Fill-Interactive-Strong: var(--link);
+  --Dash-Fill-Primary-Hover: var(--hover);
+  --Dash-Fill-Primary-Active: var(--hover);
+}
+.dash-dropdown { color: var(--ink); }
+
+/* Hero */
+.hero-card { background: linear-gradient(180deg, var(--surface-2), var(--surface)); }
+.hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+.hero-side { flex: 1; min-width: 0; }
+.hero-side.text-end .hero-name { justify-content: flex-end; }
+.hero-name { display: flex; align-items: center; font-weight: 600; font-size: 1.1rem; }
+.hero-sub { color: var(--ink-muted); font-size: 0.85rem; }
+.hero-pct { font-size: clamp(1.75rem, 7vw, 3.25rem); font-weight: 700; line-height: 1.1; white-space: nowrap; }
+.hero-vs { color: var(--ink-muted); padding-bottom: 0.9rem; }
+.hero-bar { height: 14px; margin-top: 1rem; background: var(--border); border-radius: 8px; gap: 2px; }
+.bar-p1 { background: var(--p1) !important; }
+.bar-p2 { background: var(--p2) !important; }
+.hero-caption { color: var(--ink-muted); font-size: 0.8rem; margin-top: 0.4rem; text-align: center; }
+
+/* Tabs */
+.nav-tabs {
+  border-bottom-color: var(--border); flex-wrap: nowrap; overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav-tabs::-webkit-scrollbar { display: none; }
+.nav-tabs .nav-link { color: var(--ink-muted); white-space: nowrap; border: none; }
+.nav-tabs .nav-link.active {
+  background: transparent; color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+
+/* Tiles */
+.player-card.p1 { border-top: 3px solid var(--p1); }
+.player-card.p2 { border-top: 3px solid var(--p2); }
+.tile-heading { display: flex; align-items: center; flex-wrap: wrap; font-weight: 600; margin-bottom: 0.75rem; }
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 0.75rem; }
+.tile-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); }
+.tile-value { font-size: 1.15rem; font-weight: 600; }
+.honours { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); font-size: 0.9rem; }
+.honours.muted { color: var(--ink-muted); }
+.honours-items { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin-top: 0.2rem; }
+.h2h-score { display: flex; align-items: center; flex-wrap: wrap; font-size: 1.3rem; font-weight: 700; margin-top: 0.3rem; }
+
+.form-check-input:checked { background-color: var(--p1); border-color: var(--p1); }
+
+.h2h-table { --bs-table-bg: transparent; color: var(--ink); font-size: 0.9rem; }
+.h2h-table th { color: var(--ink-muted); font-weight: 500; border-bottom-color: var(--border); }
+.h2h-table td { border-color: var(--border); }
+
+.site-footer { text-align: center; color: var(--ink-muted); font-size: 0.9rem; margin-top: 3rem; }
+
+@media (max-width: 576px) {
+  .hero-name { font-size: 0.95rem; }
+  .hero-vs { display: none; }
+}

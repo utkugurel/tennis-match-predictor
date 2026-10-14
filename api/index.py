@@ -1,10 +1,7 @@
 import os
 import sys
 
-# Add the project root to sys.path so we can import app and tennis_features
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+# Make the project root importable (app, tennis, tennis_features).
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import app
-
-if __name__ == "__main__":
-    app.run()
+from app import server as app  # noqa: E402  Vercel serves the WSGI `app`

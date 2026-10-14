@@ -1,177 +1,222 @@
+"""Train the match predictor without target leakage.
+
+Each match is described by both players' *season* stats on that surface
+with the whole tournament removed (leave-one-tournament-out). Removing only
+the match would still leak the result: the winner goes on to play (and often
+win) later rounds of the same event, inflating their season totals. Elo
+ratings are taken from just before the match; the app serves the season's
+mean pre-match Elo (tennis.etl.season_elo), the same kind of number. Validation keeps both orientations of a match in
+the same fold, and a time-based holdout checks generalisation to later years.
+"""
+
 import argparse
-import glob
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, Tuple
 
 import joblib
+import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
+from sklearn.base import clone
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
-from tennis_features import (
-    MODEL_CATEGORICAL_FEATURES,
-    MODEL_DIFF_FEATURES,
-    MODEL_NUMERIC_FEATURES,
-    build_match_example,
-    get_stats_from_db,
-)
+from tennis.etl import player_match_elo, to_long
+from tennis_features import MODEL_FEATURES, TOTAL_COLUMNS, build_model_row, compute_features
 
-MATCH_COLUMNS = ["tourney_date", "surface", "winner_name", "loser_name"]
-
-
-def load_match_results(pattern: str = "data/atp_matches_*.csv") -> pd.DataFrame:
-    """Load historical matches from CSVs and return a cleaned DataFrame."""
-    csv_paths = sorted(glob.glob(pattern))
-    if not csv_paths:
-        raise FileNotFoundError(f"No CSVs matching {pattern}")
-
-    frames: List[pd.DataFrame] = []
-    for path in csv_paths:
-        try:
-            df = pd.read_csv(path, usecols=MATCH_COLUMNS)
-        except ValueError:
-            # Fallback for files that miss optional columns
-            df = pd.read_csv(path)
-            missing = [col for col in MATCH_COLUMNS if col not in df.columns]
-            if missing:
-                print(f"Skipping {path} (missing columns: {missing})")
-                continue
-            df = df[MATCH_COLUMNS]
-        frames.append(df)
-
-    if not frames:
-        raise RuntimeError("CSV files were found but none contained the required columns.")
-
-    matches = pd.concat(frames, ignore_index=True)
-    matches["year"] = pd.to_datetime(
-        matches["tourney_date"], format="%Y%m%d", errors="coerce"
-    ).dt.year
-    matches = matches.dropna(subset=["surface", "winner_name", "loser_name", "year"])
-    matches["year"] = matches["year"].astype(int)
-    matches["surface"] = matches["surface"].str.strip()
-    return matches
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_VERSION = "2.0.0"
+MIN_OTHER_MATCHES = 3
+TEMPORAL_SPLIT_YEAR = 2019
+MAX_CALIBRATION_ERROR = 0.02
+# Logistic regression is used even though the random forest scores marginally
+# better (~0.5 pt accuracy): trees can't extrapolate, so they compress
+# predictions for two exceptional seasons towards 50%, which is exactly the
+# comparison this app is for.
+FINAL_MODEL = "logistic_regression"
 
 
-def build_training_data(
-    matches: pd.DataFrame, db_path: str = "atp_stats.db", limit: int = None
-) -> Tuple[pd.DataFrame, pd.Series, int]:
-    """Create the training matrix by pairing player stats with outcomes."""
-    rows = []
-    labels = []
-    skipped = 0
-    total = len(matches) if limit is None else min(limit, len(matches))
-
-    conn = sqlite3.connect(db_path)
-    try:
-        iterable = matches.itertuples(index=False)
-        for idx, match in enumerate(iterable, start=1):
-            if limit and idx > limit:
-                break
-            try:
-                p1_stats = get_stats_from_db(
-                    match.winner_name, int(match.year), match.surface, conn=conn
-                )
-                p2_stats = get_stats_from_db(
-                    match.loser_name, int(match.year), match.surface, conn=conn
-                )
-            except ValueError:
-                skipped += 1
-                continue
-
-            rows.append(build_match_example(p1_stats, p2_stats))
-            labels.append(1)
-            rows.append(build_match_example(p2_stats, p1_stats))
-            labels.append(0)
-
-            if idx % 5000 == 0:
-                print(f"Processed {idx}/{total} matches...")
-    finally:
-        conn.close()
-
-    if not rows:
-        raise RuntimeError("No training samples were generated. Check the database build.")
-
-    features = pd.DataFrame(rows)
-    target = pd.Series(labels, name="target")
-    print(f"Generated {len(features)} samples (skipped {skipped} matches).")
-    return features, target, skipped
+def load_matches(db_path: Path) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
+    with sqlite3.connect(db_path) as conn:
+        matches = pd.read_sql("SELECT * FROM matches", conn)
+        players = pd.read_sql("SELECT player_id, hand, ht FROM players", conn)
+        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+    return matches, players, meta
 
 
-def train_pipeline(features: pd.DataFrame, target: pd.Series) -> Pipeline:
-    """Train the sklearn pipeline."""
-    numeric_columns = (
-        [f"p1_{col}" for col in MODEL_NUMERIC_FEATURES]
-        + [f"p2_{col}" for col in MODEL_NUMERIC_FEATURES]
-        + MODEL_DIFF_FEATURES
-    )
-    categorical_columns = [f"p1_{col}" for col in MODEL_CATEGORICAL_FEATURES] + [
-        f"p2_{col}" for col in MODEL_CATEGORICAL_FEATURES
-    ]
+def leave_one_out_features(matches: pd.DataFrame, players: pd.DataFrame) -> pd.DataFrame:
+    """Per (match, player) features from season totals minus that tournament."""
+    long = to_long(matches)
+    season_totals = long.groupby(["player_id", "year", "surface"])[TOTAL_COLUMNS].transform("sum")
+    event_totals = long.groupby(["player_id", "year", "surface", "tourney_id"])[TOTAL_COLUMNS].transform("sum")
+    loo = long[["match_id", "player_id", "year"]].copy()
+    loo[TOTAL_COLUMNS] = season_totals.to_numpy() - event_totals.to_numpy()
+    elo = player_match_elo(matches)[["match_id", "player_id", "elo", "surface_elo"]]
+    loo = loo.merge(elo, on=["match_id", "player_id"], how="left", validate="one_to_one")
+    loo = loo.merge(players, on="player_id", how="left")
+    loo["other_matches"] = loo["wins"] + loo["losses"]
+    loo["won"] = long["wins"].to_numpy()
+    records = loo.to_dict("records")
+    loo["features"] = [compute_features(record) for record in records]
+    return loo
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", StandardScaler(), numeric_columns),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_columns),
-        ]
-    )
 
-    clf = Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            ("model", RandomForestClassifier(n_estimators=100, random_state=42)),
-        ]
-    )
+def build_dataset(db_path: Path):
+    matches, players, meta = load_matches(db_path)
+    loo = leave_one_out_features(matches, players)
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        features, target, test_size=0.2, random_state=42, stratify=target
-    )
-    clf.fit(X_train, y_train)
+    winners = loo[loo["won"] == 1].set_index("match_id")
+    losers = loo[loo["won"] == 0].set_index("match_id")
+    both = winners.join(losers, lsuffix="_w", rsuffix="_l", how="inner")
+    keep = (both["other_matches_w"] >= MIN_OTHER_MATCHES) & (both["other_matches_l"] >= MIN_OTHER_MATCHES)
+    both = both[keep]
+    print(f"{len(both)} of {len(matches)} matches have >= {MIN_OTHER_MATCHES} matches per player "
+          "outside the tournament.")
 
-    val_proba = clf.predict_proba(X_val)[:, 1]
-    val_pred = (val_proba >= 0.5).astype(int)
-    auc = roc_auc_score(y_val, val_proba)
-    acc = accuracy_score(y_val, val_pred)
-    print(f"Validation AUC: {auc:.3f} | Accuracy: {acc:.3f}")
-    print("\nClassification Report:")
-    print(classification_report(y_val, val_pred))
+    rows, labels, groups, years = [], [], [], []
+    for match_id, w, l, year in zip(both.index, both["features_w"], both["features_l"], both["year_w"]):
+        rows.append(build_model_row(w, l))
+        rows.append(build_model_row(l, w))
+        labels += [1, 0]
+        groups += [match_id, match_id]
+        years += [year, year]
+    X = np.asarray(rows, dtype=np.float32)
+    return X, np.asarray(labels), np.asarray(groups), np.asarray(years), meta
 
-    return clf
+
+def candidate_models() -> Dict[str, Pipeline]:
+    def pipeline(model):
+        return Pipeline(
+            [
+                ("impute", SimpleImputer(strategy="median")),
+                ("scale", StandardScaler()),
+                ("model", model),
+            ]
+        )
+
+    # HistGradientBoosting scored slightly better (log loss 0.583 vs 0.586) but
+    # skl2onnx 1.20 cannot export it from scikit-learn 1.7, so it is left out.
+    # Forest size is capped to keep the ONNX file small for Vercel.
+    return {
+        "logistic_regression": pipeline(LogisticRegression(C=1.0, max_iter=2000)),
+        "random_forest": pipeline(
+            RandomForestClassifier(
+                n_estimators=100, max_depth=10, min_samples_leaf=50, n_jobs=-1, random_state=42
+            )
+        ),
+    }
+
+
+def symmetric_proba(model, X: np.ndarray) -> np.ndarray:
+    """Average f(A,B) and 1 - f(B,A), as the app does. Rows come in mirrored pairs."""
+    proba = model.predict_proba(X)[:, 1]
+    swapped = proba.reshape(-1, 2)[:, ::-1].reshape(-1)
+    return (proba + 1.0 - swapped) / 2.0
+
+
+def calibration_error(y: np.ndarray, proba: np.ndarray, bins: int = 10) -> float:
+    edges = np.linspace(0, 1, bins + 1)
+    idx = np.clip(np.digitize(proba, edges) - 1, 0, bins - 1)
+    error = 0.0
+    for b in range(bins):
+        mask = idx == b
+        if mask.any():
+            error += mask.mean() * abs(proba[mask].mean() - y[mask].mean())
+    return float(error)
+
+
+def evaluate(model, X, y) -> Dict[str, float]:
+    proba = symmetric_proba(model, X)
+    return {
+        "auc": round(float(roc_auc_score(y, proba)), 4),
+        "accuracy": round(float(accuracy_score(y, proba >= 0.5)), 4),
+        "log_loss": round(float(log_loss(y, proba)), 4),
+        "brier": round(float(brier_score_loss(y, proba)), 4),
+        "calibration_error": round(calibration_error(y, proba), 4),
+    }
+
+
+def grouped_split(groups):
+    splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train, test = next(splitter.split(np.zeros(len(groups)), groups=groups))
+    # Keep mirrored pairs adjacent (symmetric_proba relies on it).
+    return np.sort(train), np.sort(test)
+
+
+def calibrated(model, X, y, groups):
+    folds = list(GroupKFold(n_splits=3).split(X, y, groups))
+    return CalibratedClassifierCV(clone(model), method="isotonic", cv=folds)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train the tennis match predictor model.")
-    parser.add_argument(
-        "--db-path", default="atp_stats.db", help="Path to the aggregated stats database."
-    )
-    parser.add_argument(
-        "--matches-glob", default="data/atp_matches_*.csv", help="Glob for match CSV files."
-    )
-    parser.add_argument(
-        "--model-path", default="tennis_predictor.pkl", help="Where to save the trained model."
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional cap on the number of matches to process (for quick iterations).",
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db-path", type=Path, default=BASE_DIR / "atp_stats.db")
+    parser.add_argument("--model-path", type=Path, default=BASE_DIR / "tennis_predictor.pkl")
+    parser.add_argument("--card-path", type=Path, default=BASE_DIR / "model_card.json")
     args = parser.parse_args()
 
-    Path(args.model_path).parent.mkdir(parents=True, exist_ok=True)
+    X, y, groups, years, meta = build_dataset(args.db_path)
+    print(f"Training rows: {len(X)} ({len(X) // 2} matches), {X.shape[1]} features.")
 
-    matches = load_match_results(args.matches_glob)
-    features, target, skipped = build_training_data(matches, args.db_path, args.limit)
-    print(f"Training on {len(features)} samples (skipped {skipped} matches with missing stats).")
+    train_idx, test_idx = grouped_split(groups)
+    results = {}
+    for name, model in candidate_models().items():
+        fitted = clone(model).fit(X[train_idx], y[train_idx])
+        results[name] = evaluate(fitted, X[test_idx], y[test_idx])
+        print(f"{name:24s} grouped holdout: {results[name]}")
 
-    pipeline = train_pipeline(features, target)
-    joblib.dump(pipeline, args.model_path)
+    best_name = FINAL_MODEL
+    best = candidate_models()[best_name]
+    use_calibration = results[best_name]["calibration_error"] > MAX_CALIBRATION_ERROR
+    if use_calibration:
+        cal = calibrated(best, X[train_idx], y[train_idx], groups[train_idx])
+        cal_metrics = evaluate(cal.fit(X[train_idx], y[train_idx]), X[test_idx], y[test_idx])
+        print(f"{best_name} + isotonic calibration: {cal_metrics}")
+        use_calibration = cal_metrics["log_loss"] < results[best_name]["log_loss"]
+        if use_calibration:
+            results[f"{best_name}+calibration"] = cal_metrics
+    print(f"Selected: {best_name}{' + calibration' if use_calibration else ''}")
+
+    def make_final(X_fit, y_fit, groups_fit):
+        if use_calibration:
+            return calibrated(best, X_fit, y_fit, groups_fit).fit(X_fit, y_fit)
+        return clone(best).fit(X_fit, y_fit)
+
+    past, future = years < TEMPORAL_SPLIT_YEAR, years >= TEMPORAL_SPLIT_YEAR
+    temporal = evaluate(make_final(X[past], y[past], groups[past]), X[future], y[future])
+    print(f"Temporal holdout (train < {TEMPORAL_SPLIT_YEAR}, test >= {TEMPORAL_SPLIT_YEAR}): {temporal}")
+
+    final = make_final(X, y, groups)
+    joblib.dump(final, args.model_path)
     print(f"Model saved to {args.model_path}")
+
+    selected_key = f"{best_name}+calibration" if use_calibration else best_name
+    card = {
+        "model_version": MODEL_VERSION,
+        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "model": best_name,
+        "calibrated": use_calibration,
+        "data_snapshot": meta.get("snapshot_id"),
+        "data_manifest_sha256": meta.get("manifest_sha256"),
+        "training_matches": int(len(X) // 2),
+        "min_other_matches": MIN_OTHER_MATCHES,
+        "features": MODEL_FEATURES,
+        "metrics": {
+            "grouped_holdout": results[selected_key],
+            f"temporal_holdout_{TEMPORAL_SPLIT_YEAR}_plus": temporal,
+        },
+        "candidates": results,
+    }
+    args.card_path.write_text(json.dumps(card, indent=2) + "\n")
+    print(f"Model card saved to {args.card_path}")
 
 
 if __name__ == "__main__":

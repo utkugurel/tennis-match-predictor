@@ -1,10 +1,17 @@
 # Vercel Ignore
 data/
 *.csv
+*.pkl
+*.md
 .venv/
 .git/
+.claude/
 __pycache__/
+tests/
+scripts/
 build_database.py
 train_model.py
-tests/
-*.md
+convert_to_onnx.py
+tennis/etl.py
+requirements-dev.txt
+archive/
