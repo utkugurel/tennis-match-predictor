@@ -1,4 +1,4 @@
-"""Tennis Match Predictor: Dash app (served on Vercel via api/index.py)."""
+"""Tennis Match Predictor: Dash app, served on Vercel through `app` (its Flask server)."""
 
 import os
 from typing import Dict, List, Optional

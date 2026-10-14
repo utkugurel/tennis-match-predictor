@@ -202,3 +202,14 @@ def test_vercel_entrypoint_is_wsgi():
 
     assert isinstance(app_module.app, flask.Flask)
     assert app_module.app is app_module.server
+
+
+def test_no_vercel_rewrite_hides_the_request_path():
+    # A catch-all rewrite to another path makes Flask see that path instead of
+    # the real one, so every URL falls through to Dash's page (see README).
+    import json
+    from pathlib import Path
+
+    config = Path(app_module.__file__).with_name("vercel.json")
+    if config.exists():
+        assert not json.loads(config.read_text()).get("rewrites")
