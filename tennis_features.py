@@ -1,17 +1,41 @@
+"""Feature engineering shared by training (train_model.py) and inference.
+
+Works on plain mappings so it runs without pandas at serve time. A player's
+"season totals" are summed per (player, year, surface); during training the
+match being predicted is subtracted from them first (leave-one-out).
+"""
+
 import math
-import sqlite3
-from typing import Any, Dict, List, Optional
+import unicodedata
+from typing import Any, Dict, List, Mapping, Optional
+
+SURFACES: List[str] = ["Hard", "Clay", "Grass", "Carpet"]
 
 
-MODEL_NUMERIC_FEATURES: List[str] = [
-    "ht",
-    "age",
-    "rank",
-    "rank_points",
-    "matches_played",
-    "wins",
-    "losses",
-    "win_pct",
+def fold_name(text: Optional[str]) -> str:
+    """Lower-case, accent-free, trimmed form of a name, for search and matching."""
+    normalized = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower().strip()
+
+
+# Per-match stat columns from the raw data, summed into season totals for the
+# player ("p_") and for their opponents ("o_").
+MATCH_STATS: List[str] = [
+    "ace", "df", "svpt", "1stIn", "1stWon", "2ndWon", "SvGms", "bpSaved", "bpFaced",
+]
+
+# Every additive column in a season-totals record.
+TOTAL_COLUMNS: List[str] = (
+    ["wins", "losses", "serve_matches"]
+    + [f"p_{col}" for col in MATCH_STATS]
+    + [f"o_{col}" for col in MATCH_STATS]
+    + ["rank_sum", "rank_n", "rank_points_sum", "rank_points_n", "age_sum", "age_n"]
+)
+
+UNRANKED = 2000.0
+
+# Stats that only exist when match stats were recorded (mostly 1991 onwards).
+SERVE_FEATURES: List[str] = [
     "ace_rate",
     "df_rate",
     "first_serve_pct",
@@ -28,173 +52,140 @@ MODEL_NUMERIC_FEATURES: List[str] = [
     "bp_created_per_match",
 ]
 
-MODEL_CATEGORICAL_FEATURES: List[str] = ["hand"]
+# ATP ranking and ranking points are deliberately not model inputs: they
+# describe the previous 12 months, so a player returning from injury (Nadal
+# 2013) looks weaker than their season was. Elo ratings react to results
+# immediately and account for opponent strength. Training uses the rating
+# just before each match; serving uses the season's mean pre-match rating
+# (tennis.etl.season_elo), so both are the same kind of number.
+PLAYER_NUMERIC_FEATURES: List[str] = [
+    "elo",
+    "surface_elo",
+    "age",
+    "ht",
+    "matches_played",
+    "win_pct_smoothed",
+] + SERVE_FEATURES
 
-MODEL_BASE_FEATURES: List[str] = list(MODEL_NUMERIC_FEATURES) + list(
-    MODEL_CATEGORICAL_FEATURES
+HANDS = ("L", "R", "U")
+
+# Model input, in order: p1 - p2 differences, then per-player flags for
+# whether serve stats exist (the differences are NaN otherwise and get
+# imputed), then one-hot hands (R is the baseline). Only differences are used so the model sees no "slot" information
+# beyond handedness; predict() additionally averages both orderings.
+MODEL_FEATURES: List[str] = (
+    [f"diff_{name}" for name in PLAYER_NUMERIC_FEATURES]
+    + ["p1_has_serve_stats", "p2_has_serve_stats"]
+    + ["p1_hand_L", "p1_hand_U", "p2_hand_L", "p2_hand_U"]
 )
 
-MODEL_DIFF_FEATURES: List[str] = ["log_rank_diff", "age_diff", "height_diff"]
 
-
-def _safe_number(value: Any) -> float:
-    """Convert None/NaN/str numbers to a float, defaulting to 0."""
+def _num(value: Any) -> Optional[float]:
+    """Convert to float; None/NaN/garbage become None."""
     if value is None:
-        return 0.0
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return 0.0
-    if math.isnan(number):
-        return 0.0
-    return number
+        return None
+    return None if math.isnan(number) else number
 
 
-def _safe_divide(numerator: Any, denominator: Any) -> float:
-    top = _safe_number(numerator)
-    bottom = _safe_number(denominator)
-    if bottom == 0:
-        return 0.0
+def _ratio(numerator: Any, denominator: Any) -> float:
+    top, bottom = _num(numerator), _num(denominator)
+    if top is None or not bottom:
+        return math.nan
     return top / bottom
 
 
-def _normalize_hand(hand_value: Optional[str]) -> str:
-    hand = (hand_value or "").strip().upper()
-    return hand if hand in {"L", "R", "U"} else "U"
+def _mean(total: Any, count: Any) -> Optional[float]:
+    total, count = _num(total), _num(count)
+    if not count:
+        return None
+    return total / count
 
 
-def record_to_feature_dict(record: sqlite3.Row) -> Dict[str, Any]:
-    """Convert a SQLite row into the feature dictionary used by the model."""
-    matches = _safe_number(record["matches_played"])
-    wins = _safe_number(record["wins"])
-    losses = _safe_number(record["losses"])
-    p_svpt = _safe_number(record["p_svpt"])
-    p_1stin = _safe_number(record["p_1stIn"])
-    p_1stwon = _safe_number(record["p_1stWon"])
-    p_2ndwon = _safe_number(record["p_2ndWon"])
-    p_sg = _safe_number(record["p_SvGms"])
-    p_bp_faced = _safe_number(record["p_bpFaced"])
-    p_bp_saved = _safe_number(record["p_bpSaved"])
-    o_svpt = _safe_number(record["o_svpt"])
-    o_1stwon = _safe_number(record["o_1stWon"])
-    o_2ndwon = _safe_number(record["o_2ndWon"])
-    o_bp_faced = _safe_number(record["o_bpFaced"])
-    o_bp_saved = _safe_number(record["o_bpSaved"])
-    p_aces = _safe_number(record["p_ace"])
-    p_df = _safe_number(record["p_df"])
+def normalize_hand(hand_value: Optional[str]) -> str:
+    hand = (hand_value or "").strip().upper() if isinstance(hand_value, str) else ""
+    return hand if hand in HANDS else "U"
 
-    second_serve_points = max(p_svpt - p_1stin, 0.0)
-    opp_service_points_won = o_1stwon + o_2ndwon
-    opp_break_points_converted = max(o_bp_faced - o_bp_saved, 0.0)
+
+def compute_features(totals: Mapping[str, Any]) -> Dict[str, Any]:
+    """Turn a season-totals record into display stats and model features.
+
+    `totals` needs TOTAL_COLUMNS plus `hand`, `ht`, `elo` and `surface_elo`.
+    Serve/return stats are NaN (not 0) when the season has no recorded
+    match stats.
+    """
+    t = {col: _num(totals.get(col)) or 0.0 for col in TOTAL_COLUMNS}
+    wins, losses = t["wins"], t["losses"]
+    matches = wins + losses
+    serve_matches = t["serve_matches"]
+    has_stats = serve_matches > 0 and t["p_svpt"] > 0
+
+    rank = _mean(t["rank_sum"], t["rank_n"])
+    rank_points = _mean(t["rank_points_sum"], t["rank_points_n"])
+    age = _mean(t["age_sum"], t["age_n"])
 
     features: Dict[str, Any] = {
-        "player_name": record["player_name"],
-        "year": _safe_number(record["year"]),
-        "surface": record["surface"],
-        "hand": _normalize_hand(record["p_hand"]),
-        "ht": _safe_number(record["p_ht"]),
-        "age": _safe_number(record["p_age"]),
-        "rank": _safe_number(record["p_rank"]),
-        "rank_points": _safe_number(record["p_rank_points"]),
-        "matches_played": matches,
+        "hand": normalize_hand(totals.get("hand")),
+        "elo": _num(totals.get("elo")) or math.nan,
+        "surface_elo": _num(totals.get("surface_elo")) or math.nan,
+        "ht": _num(totals.get("ht")) or math.nan,
+        "age": age if age is not None else math.nan,
+        "rank": rank,
+        "log_rank": math.log(rank if rank and rank > 0 else UNRANKED),
+        "rank_points": rank_points or 0.0,
         "wins": wins,
         "losses": losses,
-        "win_pct": _safe_divide(wins, wins + losses),
-        "ace_rate": _safe_divide(p_aces, p_svpt),
-        "df_rate": _safe_divide(p_df, p_svpt),
-        "first_serve_pct": _safe_divide(p_1stin, p_svpt),
-        "first_serve_win_pct": _safe_divide(p_1stwon, p_1stin),
-        "second_serve_win_pct": _safe_divide(p_2ndwon, second_serve_points),
-        "service_points_won_pct": _safe_divide(p_1stwon + p_2ndwon, p_svpt),
-        "bp_save_pct": _safe_divide(p_bp_saved, p_bp_faced),
-        "return_points_won_pct": _safe_divide(
-            max(o_svpt - opp_service_points_won, 0.0), o_svpt
-        ),
-        "bp_conversion_pct": _safe_divide(opp_break_points_converted, o_bp_faced),
-        "ace_per_match": _safe_divide(p_aces, matches),
-        "df_per_match": _safe_divide(p_df, matches),
-        "serve_games_per_match": _safe_divide(p_sg, matches),
-        "bp_faced_per_match": _safe_divide(p_bp_faced, matches),
-        "bp_created_per_match": _safe_divide(o_bp_faced, matches),
+        "matches_played": matches,
+        "win_pct": _ratio(wins, matches) if matches else 0.0,
+        # Shrunk towards 50% so a 2-0 season doesn't look like a 100% player.
+        "win_pct_smoothed": (wins + 2.0) / (matches + 4.0),
+        "has_serve_stats": 1.0 if has_stats else 0.0,
+        "serve_matches": serve_matches,
     }
+
+    if has_stats:
+        svpt, first_in = t["p_svpt"], t["p_1stIn"]
+        opp_svpt = t["o_svpt"]
+        features.update(
+            {
+                "ace_rate": _ratio(t["p_ace"], svpt),
+                "df_rate": _ratio(t["p_df"], svpt),
+                "first_serve_pct": _ratio(first_in, svpt),
+                "first_serve_win_pct": _ratio(t["p_1stWon"], first_in),
+                "second_serve_win_pct": _ratio(t["p_2ndWon"], max(svpt - first_in, 0.0)),
+                "service_points_won_pct": _ratio(t["p_1stWon"] + t["p_2ndWon"], svpt),
+                "bp_save_pct": _ratio(t["p_bpSaved"], t["p_bpFaced"]),
+                "return_points_won_pct": _ratio(
+                    max(opp_svpt - t["o_1stWon"] - t["o_2ndWon"], 0.0), opp_svpt
+                ),
+                "bp_conversion_pct": _ratio(
+                    max(t["o_bpFaced"] - t["o_bpSaved"], 0.0), t["o_bpFaced"]
+                ),
+                "ace_per_match": _ratio(t["p_ace"], serve_matches),
+                "df_per_match": _ratio(t["p_df"], serve_matches),
+                "serve_games_per_match": _ratio(t["p_SvGms"], serve_matches),
+                "bp_faced_per_match": _ratio(t["p_bpFaced"], serve_matches),
+                "bp_created_per_match": _ratio(t["o_bpFaced"], serve_matches),
+            }
+        )
+    else:
+        features.update({name: math.nan for name in SERVE_FEATURES})
     return features
 
 
-def get_stats_from_db(
-    player_name: str,
-    year: int,
-    surface: str,
-    db_path: str = "atp_stats.db",
-    conn: Optional[sqlite3.Connection] = None,
-) -> Dict[str, Any]:
-    """
-    Retrieve a player's season-long stats for a given year and surface and
-    return the engineered features the model expects.
-    """
-    surface_clean = (surface or "").strip()
-    player_clean = (player_name or "").strip()
-    if not player_clean or not surface_clean:
-        raise ValueError("player_name and surface are required.")
-
-    close_conn = False
-    connection = conn
-    previous_factory = None
-    if connection is None:
-        connection = sqlite3.connect(db_path)
-        close_conn = True
-    else:
-        previous_factory = connection.row_factory
-    connection.row_factory = sqlite3.Row
-
-    query = """
-        SELECT *
-        FROM player_yearly_stats
-        WHERE lower(player_name) = lower(?)
-          AND year = ?
-          AND upper(surface) = upper(?)
-        LIMIT 1
-    """
-
-    cursor = connection.execute(query, (player_clean, int(year), surface_clean))
-    record = cursor.fetchone()
-
-    if previous_factory is not None:
-        connection.row_factory = previous_factory
-
-    if close_conn:
-        connection.close()
-
-    if record is None:
-        raise ValueError(
-            f"No stats found for {player_name} ({year}, {surface_clean}). "
-            "Run build_database.py and ensure the player/year/surface combination exists."
-        )
-
-    return record_to_feature_dict(record)
-
-
-def build_match_example(p1_stats: Dict[str, Any], p2_stats: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Combine two player feature dictionaries into the prefixed format the
-    training pipeline expects (p1_* vs p2_* features).
-    """
-    row: Dict[str, Any] = {}
-    
-    # Calculate differences before prefixing
-    p1_rank = _safe_number(p1_stats.get("rank", 0))
-    p2_rank = _safe_number(p2_stats.get("rank", 0))
-    # Avoid log(0) or log(negative) issues by using a small epsilon if rank is 0 (unranked)
-    # However, unranked usually means high rank number effectively. Let's treat 0 as a very high number for log diff?
-    # Or just use the raw values if they are safe.
-    # A safer approach for log rank: if rank > 0, use log(rank). If 0, treat as e.g. 2000 (low rank).
-    def get_log_rank(r):
-        return math.log(r) if r > 0 else math.log(2000)
-
-    row["log_rank_diff"] = get_log_rank(p1_rank) - get_log_rank(p2_rank)
-    row["age_diff"] = _safe_number(p1_stats.get("age", 0)) - _safe_number(p2_stats.get("age", 0))
-    row["height_diff"] = _safe_number(p1_stats.get("ht", 0)) - _safe_number(p2_stats.get("ht", 0))
-
-    for key in MODEL_BASE_FEATURES:
-        row[f"p1_{key}"] = p1_stats.get(key, 0)
-        row[f"p2_{key}"] = p2_stats.get(key, 0)
+def build_model_row(p1: Mapping[str, Any], p2: Mapping[str, Any]) -> List[float]:
+    """Model input vector (ordered as MODEL_FEATURES) for p1 vs p2."""
+    row: List[float] = []
+    for name in PLAYER_NUMERIC_FEATURES:
+        a, b = _num(p1.get(name)), _num(p2.get(name))
+        row.append(math.nan if a is None or b is None else a - b)
+    for player in (p1, p2):
+        row.append(1.0 if player.get("has_serve_stats") else 0.0)
+    for player in (p1, p2):
+        hand = normalize_hand(player.get("hand"))
+        row.append(1.0 if hand == "L" else 0.0)
+        row.append(1.0 if hand == "U" else 0.0)
     return row

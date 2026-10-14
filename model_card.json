@@ -1,0 +1,70 @@
+{
+  "model_version": "2.0.0",
+  "trained_at": "2026-10-14T10:57:09+00:00",
+  "model": "logistic_regression",
+  "calibrated": false,
+  "data_snapshot": "sackmann-atp-2024-12-30",
+  "data_manifest_sha256": "c36022de1891995428f786274e96cd08e6e7e6d5a90965092757ef09b6dd12be",
+  "training_matches": 135808,
+  "min_other_matches": 3,
+  "features": [
+    "diff_elo",
+    "diff_surface_elo",
+    "diff_age",
+    "diff_ht",
+    "diff_matches_played",
+    "diff_win_pct_smoothed",
+    "diff_ace_rate",
+    "diff_df_rate",
+    "diff_first_serve_pct",
+    "diff_first_serve_win_pct",
+    "diff_second_serve_win_pct",
+    "diff_service_points_won_pct",
+    "diff_bp_save_pct",
+    "diff_return_points_won_pct",
+    "diff_bp_conversion_pct",
+    "diff_ace_per_match",
+    "diff_df_per_match",
+    "diff_serve_games_per_match",
+    "diff_bp_faced_per_match",
+    "diff_bp_created_per_match",
+    "p1_has_serve_stats",
+    "p2_has_serve_stats",
+    "p1_hand_L",
+    "p1_hand_U",
+    "p2_hand_L",
+    "p2_hand_U"
+  ],
+  "metrics": {
+    "grouped_holdout": {
+      "auc": 0.7471,
+      "accuracy": 0.6805,
+      "log_loss": 0.593,
+      "brier": 0.2039,
+      "calibration_error": 0.0029
+    },
+    "temporal_holdout_2019_plus": {
+      "auc": 0.7116,
+      "accuracy": 0.6492,
+      "log_loss": 0.6209,
+      "brier": 0.2162,
+      "calibration_error": 0.0256
+    }
+  },
+  "candidates": {
+    "logistic_regression": {
+      "auc": 0.7471,
+      "accuracy": 0.6805,
+      "log_loss": 0.593,
+      "brier": 0.2039,
+      "calibration_error": 0.0029
+    },
+    "random_forest": {
+      "auc": 0.7475,
+      "accuracy": 0.6805,
+      "log_loss": 0.593,
+      "brier": 0.2038,
+      "calibration_error": 0.009
+    }
+  }
+}
